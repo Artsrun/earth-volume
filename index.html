@@ -1,1 +1,705 @@
-PLACEHOLDER
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>EARTH.VOLUME / GEODESIC SHELL · v2</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap');
+
+:root{
+  --bg:#0d0b08; --surface:#141108; --stone:#1f1a10; --stone-2:#2a2316;
+  --hairline:#3a2f1c; --bone:#d4c5a3; --bone-dim:#9a8c6d; --bone-faint:#5a5038;
+  --ochre:#c89050; --rust:#b05a32; --oxide:#8c2e1c; --lichen:#6b7a3a; --abyss:#16242e;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{
+  background:var(--bg); color:var(--bone);
+  font-family:'IBM Plex Mono',ui-monospace,monospace;
+  font-size:13px; line-height:1.4; min-height:100vh; overflow-x:hidden;
+  -webkit-text-size-adjust:100%;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+body::before{
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:1000; opacity:.04;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  mix-blend-mode:overlay;
+}
+.shell{max-width:1440px;margin:0 auto;padding:12px;display:grid;grid-template-rows:auto auto 1fr auto;gap:10px;min-height:100vh}
+
+/* header */
+.top{border:1px solid var(--hairline);background:var(--surface);display:grid;grid-template-columns:1fr auto auto auto}
+.top>div{padding:9px 13px;border-right:1px solid var(--hairline);display:flex;align-items:center;gap:8px;white-space:nowrap}
+.top>div:last-child{border-right:0}
+.brand{font-weight:700;font-size:14px;letter-spacing:1px}
+.brand::before{content:'▣';color:var(--rust);margin-right:6px}
+.top .label{color:var(--bone-faint);font-size:10px;text-transform:uppercase;letter-spacing:1.5px}
+.top .val{color:var(--ochre);font-weight:500;font-variant-numeric:tabular-nums}
+
+.meta-strip{display:flex;font-size:10px;color:var(--bone-dim);text-transform:uppercase;letter-spacing:1.6px;border:1px solid var(--hairline);background:var(--surface);overflow-x:auto}
+.meta-strip>span{padding:6px 13px;border-right:1px solid var(--hairline);white-space:nowrap}
+.meta-strip>span:last-child{border-right:0;flex:1;text-align:right;color:var(--bone-faint)}
+
+/* provenance chips */
+.tag{font-size:8px;letter-spacing:1.6px;text-transform:uppercase;padding:1px 5px;border:1px solid currentColor;line-height:1.5;vertical-align:middle}
+.tag.m{color:var(--ochre)}.tag.d{color:var(--lichen)}.tag.c{color:var(--bone-dim)}
+.tag.x{color:var(--rust)}.tag.a{color:var(--oxide)}
+
+.main{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(340px,.8fr);gap:10px;min-height:0}
+
+.viz{position:relative;border:1px solid var(--hairline);background:#070906;overflow:hidden;min-height:min(62vh,560px);touch-action:none}
+#gl{display:block;width:100%;height:100%}
+.crop{position:absolute;width:16px;height:16px;border-color:var(--ochre);border-style:solid;z-index:3;pointer-events:none}
+.crop.tl{top:9px;left:9px;border-width:1px 0 0 1px}
+.crop.tr{top:9px;right:9px;border-width:1px 1px 0 0}
+.crop.bl{bottom:9px;left:9px;border-width:0 0 1px 1px}
+.crop.br{bottom:9px;right:9px;border-width:0 1px 1px 0}
+
+.readout{position:absolute;top:12px;right:30px;z-index:3;font-size:10px;text-align:right;color:var(--bone-dim);line-height:1.65;letter-spacing:1px}
+.readout .k{color:var(--bone-faint);text-transform:uppercase}
+.readout .v{color:var(--ochre);font-weight:500;font-variant-numeric:tabular-nums}
+.viz-caption{position:absolute;bottom:11px;left:32px;right:32px;font-size:10px;color:var(--bone-faint);letter-spacing:1.4px;text-transform:uppercase;z-index:3}
+.viz-caption b{color:var(--bone-dim);font-weight:600}
+
+/* loader */
+.loader{position:absolute;inset:0;z-index:5;background:rgba(7,9,6,.94);display:grid;place-content:center;gap:14px;text-align:center;padding:24px;transition:opacity .6s}
+.loader.gone{opacity:0;pointer-events:none}
+.loader .t{font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--bone-dim)}
+.loader .n{font-size:38px;font-weight:300;letter-spacing:-2px;color:var(--bone);font-variant-numeric:tabular-nums}
+.bar{width:min(64vw,300px);height:2px;background:var(--hairline);overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:var(--ochre);transition:width .18s linear}
+.loader .src{font-size:9px;color:var(--bone-faint);letter-spacing:1.4px;max-width:320px;line-height:1.7}
+
+/* panel */
+.panel{display:grid;grid-auto-rows:min-content;gap:10px;min-height:0;overflow-y:auto;padding-right:2px}
+.panel::-webkit-scrollbar{width:5px}
+.panel::-webkit-scrollbar-thumb{background:var(--hairline)}
+.section{border:1px solid var(--hairline);background:var(--surface);padding:13px 15px}
+.section-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;border-bottom:1px solid var(--hairline);padding-bottom:9px;margin-bottom:11px}
+.section-head .num{font-size:10px;color:var(--ochre);letter-spacing:2px;font-weight:600}
+.section-head .title{font-size:11px;text-transform:uppercase;letter-spacing:2px;font-weight:600}
+.section-head .fig{font-size:9px;color:var(--bone-faint);letter-spacing:1.5px}
+
+.rows{display:grid;gap:1px;background:var(--hairline);border:1px solid var(--hairline)}
+.row{background:var(--stone);padding:8px 11px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:baseline}
+.row .k{font-size:9px;color:var(--bone-faint);text-transform:uppercase;letter-spacing:1.4px}
+.row .v{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
+.row .v.hot{color:var(--ochre)}
+.row .v.warn{color:var(--rust)}
+.row .sub{grid-column:1/-1;font-size:9px;color:var(--bone-dim);letter-spacing:.6px}
+
+label.ctl{display:block;font-size:9px;color:var(--bone-faint);text-transform:uppercase;letter-spacing:1.6px;margin:12px 0 2px}
+label.ctl b{color:var(--ochre);font-weight:600;font-variant-numeric:tabular-nums;float:right}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:2px;background:var(--hairline);outline:none;margin:9px 0}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:3px;height:22px;background:var(--ochre);cursor:pointer;border-radius:0;box-shadow:0 0 10px rgba(200,144,80,.5)}
+input[type=range]::-moz-range-thumb{width:3px;height:22px;background:var(--ochre);border:none;border-radius:0;cursor:pointer}
+
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:1px;background:var(--hairline);border:1px solid var(--hairline);margin-top:4px}
+.seg button{padding:8px 4px;border:0;background:var(--stone);color:var(--bone-dim);font:inherit;font-size:10px;letter-spacing:1.4px;text-transform:uppercase;cursor:pointer;transition:background .15s,color .15s}
+.seg button:hover{background:var(--stone-2);color:var(--bone)}
+.seg button[aria-pressed=true]{background:var(--oxide);color:var(--bone)}
+.seg button:focus-visible{outline:2px solid var(--ochre);outline-offset:-2px}
+
+.btn-wide{width:100%;padding:13px;background:var(--stone);border:1px solid var(--ochre);color:var(--ochre);font:inherit;font-size:11px;font-weight:600;letter-spacing:2.6px;text-transform:uppercase;cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:background .15s,color .15s}
+.btn-wide:hover{background:var(--ochre);color:var(--bg)}
+.btn-wide[disabled]{opacity:.4;cursor:not-allowed}
+.btn-wide::after{content:'◉'}
+.btn-wide.live{border-color:var(--rust);color:var(--rust)}
+.btn-wide.live::after{content:'▮▮'}
+
+.status{font-size:10px;color:var(--bone-faint);text-align:center;letter-spacing:1.4px;text-transform:uppercase;margin-top:9px;padding-top:9px;border-top:1px dashed var(--hairline)}
+.status.ok{color:var(--ochre)} .status.err{color:var(--rust)}
+
+.gyro{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--hairline);border:1px solid var(--hairline);margin-top:10px}
+.gyro div{background:var(--stone);padding:7px 6px;text-align:center}
+.gyro .k{font-size:8px;color:var(--bone-faint);letter-spacing:1.6px}
+.gyro .v{font-size:13px;color:var(--bone);font-variant-numeric:tabular-nums}
+
+/* legend */
+.legend{border:1px solid var(--hairline);background:var(--surface);padding:12px 15px}
+.legend-head{display:flex;justify-content:space-between;align-items:baseline;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--bone-dim);margin-bottom:9px}
+.legend-head .num{color:var(--ochre)}
+.ramp{height:12px;border:1px solid var(--hairline)}
+.ramp-lab{display:flex;justify-content:space-between;font-size:9px;color:var(--bone-faint);letter-spacing:1.2px;margin-top:5px;font-variant-numeric:tabular-nums}
+.prov{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:11px;padding-top:10px;border-top:1px dashed var(--hairline);font-size:9px;color:var(--bone-faint);letter-spacing:1.1px;text-transform:uppercase}
+
+@media (max-width:960px){
+  .main{grid-template-columns:1fr}
+  .top{grid-template-columns:1fr auto}
+  .top>div:nth-child(3){display:none}
+  .viz{min-height:52vh}
+  .readout{right:26px;font-size:9px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header class="top">
+    <div><span class="brand">EARTH.VOLUME</span><span class="label">/ geodesic shell / v2.0</span></div>
+    <div><span class="label">Section</span><span class="val">§A.004</span></div>
+    <div><span class="label">Datum</span><span class="val">WGS84 · EGM2008</span></div>
+    <div><span class="label">UTC</span><span class="val" id="clock">—</span></div>
+  </header>
+
+  <div class="meta-strip">
+    <span>Shell: <span id="m-faces">—</span> faces</span>
+    <span>DEM: <span id="m-dem">not loaded</span></span>
+    <span>Ground sample: <span id="m-gsd">—</span></span>
+    <span>Real device: tilt to turn the shell · drag / pinch as fallback · v2 mobile-first</span>
+  </div>
+
+  <main class="main">
+    <div class="viz" id="viz">
+      <canvas id="gl"></canvas>
+      <div class="crop tl"></div><div class="crop tr"></div>
+      <div class="crop bl"></div><div class="crop br"></div>
+
+      <div class="readout">
+        <div><span class="k">fig 1.1 —</span> <span class="v">icosahedral shell</span></div>
+        <div><span class="k">relief ×</span> <span class="v" id="r-exag">60</span></div>
+        <div><span class="k">observer h —</span> <span class="v" id="r-obs">—</span></div>
+      </div>
+
+      <div class="viz-caption"><b>FIG.1.1</b> — Geodesic shell displaced by measured elevation; nested atmospheric layers at declared scale</div>
+
+      <div class="loader" id="loader">
+        <div class="t">Acquiring elevation tiles</div>
+        <div class="n" id="ld-n">0 / 64</div>
+        <div class="bar"><i id="ld-bar"></i></div>
+        <div class="src" id="ld-src">Terrarium RGB · GMTED2010 land + ETOPO1 bathymetry · AWS Open Data</div>
+      </div>
+    </div>
+
+    <aside class="panel">
+
+      <div class="section">
+        <div class="section-head"><span class="num">§01</span><span class="title">Elevation source</span><span class="fig">FIG.2</span></div>
+        <div class="rows">
+          <div class="row"><span class="k">Dataset</span><span class="v hot" style="font-size:11px">GMTED2010 / ETOPO1</span>
+            <span class="sub"><span class="tag m">measured</span> served as terrarium RGB tiles, AWS Open Data</span></div>
+          <div class="row"><span class="k">Tile zoom</span><span class="v" id="s-zoom">z3</span>
+            <span class="sub">grid <span id="s-grid">8×8</span> · raster <span id="s-raster">2048²</span> px</span></div>
+          <div class="row"><span class="k">Ground sample dist.</span><span class="v" id="s-gsd">—</span>
+            <span class="sub"><span class="tag d">derived</span> at equator; coarser than any single summit</span></div>
+          <div class="row"><span class="k">Polar coverage</span><span class="v warn">±85.051°</span>
+            <span class="sub"><span class="tag a">absent</span> beyond Mercator limit — edge value held</span></div>
+        </div>
+        <div class="seg" role="group" aria-label="Tile zoom">
+          <button data-z="2" aria-pressed="false">z2 · 16</button>
+          <button data-z="3" aria-pressed="true">z3 · 64</button>
+          <button data-z="4" aria-pressed="false">z4 · 256</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><span class="num">§02</span><span class="title">Volume parameters</span><span class="fig">FIG.3</span></div>
+        <label class="ctl" for="exag">Relief exaggeration <b id="exag-v">×60</b></label>
+        <input type="range" id="exag" min="1" max="200" value="60" step="1">
+        <div class="sub" style="font-size:9px;color:var(--bone-dim);letter-spacing:.6px"><span class="tag x">declared</span> display scale — true relief is ×1 (8,848 m over 6,371 km)</div>
+        <label class="ctl">Shell subdivision</label>
+        <div class="seg" role="group" aria-label="Shell subdivision">
+          <button data-d="3" aria-pressed="false">coarse · 1.3k</button>
+          <button data-d="4" aria-pressed="true">medium · 5k</button>
+          <button data-d="5" aria-pressed="false">fine · 20k</button>
+        </div>
+        <label class="ctl">Layers</label>
+        <div class="seg" role="group" aria-label="Layers">
+          <button data-layer="sea" aria-pressed="true">sea datum</button>
+          <button data-layer="atmo" aria-pressed="true">atmosphere</button>
+          <button data-layer="cage" aria-pressed="true">cage</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><span class="num">§03</span><span class="title">Device as window</span><span class="fig">FIG.4</span></div>
+        <button class="btn-wide" id="orient-btn">Use device tilt</button>
+        <div class="gyro">
+          <div><div class="k">α</div><div class="v" id="g-a">—</div></div>
+          <div><div class="k">β</div><div class="v" id="g-b">—</div></div>
+          <div><div class="k">γ</div><div class="v" id="g-g">—</div></div>
+        </div>
+        <div class="status" id="orient-status">Tilt control off — drag to rotate</div>
+        <button class="btn-wide" id="recenter-btn" style="margin-top:10px;border-color:var(--hairline);color:var(--bone-dim)">Recenter · Yerevan view</button>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><span class="num">§04</span><span class="title">Observer · Lake Yerevan</span><span class="fig">FIG.5</span></div>
+        <div class="rows">
+          <div class="row"><span class="k">Position</span><span class="v" style="font-size:11px">40°10′37″N 44°29′13″E</span>
+            <span class="sub"><span class="tag c">constant</span> 40.177°N 44.487°E · field report §01</span></div>
+          <div class="row"><span class="k">Elevation, declared</span><span class="v">895 m</span>
+            <span class="sub"><span class="tag c">constant</span> SW shore, Erebuni reservoir</span></div>
+          <div class="row"><span class="k">Elevation, sampled</span><span class="v hot" id="s-obs">—</span>
+            <span class="sub"><span class="tag m">measured</span> bilinear from DEM raster</span></div>
+          <div class="row"><span class="k">Residual</span><span class="v warn" id="s-resid">—</span>
+            <span class="sub"><span class="tag d">derived</span> sampled − declared; a cell this wide averages the whole plateau</span></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><span class="num">§05</span><span class="title">Ararat baseline</span><span class="fig">FIG.6</span></div>
+        <div class="rows">
+          <div class="row"><span class="k">Ground distance</span><span class="v">53.38 km</span>
+            <span class="sub"><span class="tag c">constant</span> haversine, field report §02</span></div>
+          <div class="row"><span class="k">Summit, declared</span><span class="v">5,137 m</span>
+            <span class="sub"><span class="tag c">constant</span> Masis</span></div>
+          <div class="row"><span class="k">Summit, sampled</span><span class="v hot" id="s-arar">—</span>
+            <span class="sub"><span class="tag m">measured</span> at 39.702°N 44.396°E</span></div>
+          <div class="row"><span class="k">Elevation angle</span><span class="v">4.34°</span>
+            <span class="sub"><span class="tag c">constant</span> curvature + refraction corrected</span></div>
+          <div class="row"><span class="k">Angle from DEM</span><span class="v" id="s-angle">—</span>
+            <span class="sub"><span class="tag d">derived</span> same correction, sampled heights — the gap is the raster, not the mountain</span></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <div class="legend">
+    <div class="legend-head"><span><span class="num">§06</span> &nbsp; Hypsometric scale</span><span id="lg-range">−11,000 m → 8,850 m</span></div>
+    <div class="ramp" id="ramp"></div>
+    <div class="ramp-lab"><span>−11 km</span><span>−200 m</span><span>0</span><span>1.5 km</span><span>3 km</span><span>4.5 km</span><span>6 km+</span></div>
+    <div class="prov">
+      <span><span class="tag m">measured</span> sensor / dataset value</span>
+      <span><span class="tag d">derived</span> computed from measured inputs</span>
+      <span><span class="tag c">constant</span> frozen field-report figure</span>
+      <span><span class="tag x">declared</span> display choice, not physical</span>
+      <span><span class="tag a">absent</span> no data in source</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── constants ─────────────────────────────────────────────
+const R_E = 6371000;                 // m, mean radius — CONSTANT
+const OBS = { lat: 40.177, lon: 44.487, h: 895 };        // CONSTANT §01
+const ARARAT = { lat: 39.702, lon: 44.396, h: 5137 };    // CONSTANT §02
+const BASELINE_M = 53384;            // CONSTANT §02
+const NET_DEPRESSION = 194.6;        // CONSTANT §02 (curvature − refraction)
+const ATMO_SCALE = 8;                // DECLARED display scale for air layers
+const TILE_URL = (z,x,y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+
+const $ = id => document.getElementById(id);
+const d2r = Math.PI/180, r2d = 180/Math.PI;
+const fmt = n => n.toLocaleString('en-US',{maximumFractionDigits:0});
+
+// ── DEM store ─────────────────────────────────────────────
+let DEM = null, DEM_N = 0, DEM_OK = false, ZOOM = 3;
+
+const loadImg = url => new Promise((res, rej) => {
+  const im = new Image();
+  im.crossOrigin = 'anonymous';
+  im.onload = () => res(im);
+  im.onerror = () => rej(new Error(url));
+  im.src = url;
+});
+
+const pool = async (items, n, fn) => {
+  let i = 0;
+  await Promise.all(Array.from({length:n}, async () => {
+    while (i < items.length) await fn(items[i++]);
+  }));
+};
+
+const loadDEM = async (z) => {
+  const n = 1 << z, size = 256 * n;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const cx = cv.getContext('2d', { willReadFrequently: true });
+  cx.fillStyle = '#008000'; cx.fillRect(0,0,size,size); // encodes 0 m if a tile fails
+
+  const jobs = [];
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) jobs.push([x,y]);
+
+  let done = 0, failed = 0;
+  $('ld-n').textContent = `0 / ${jobs.length}`;
+
+  await pool(jobs, 10, async ([x,y]) => {
+    try { cx.drawImage(await loadImg(TILE_URL(z,x,y)), x*256, y*256); }
+    catch { failed++; }
+    done++;
+    $('ld-n').textContent = `${done} / ${jobs.length}`;
+    $('ld-bar').style.width = (done/jobs.length*100) + '%';
+  });
+
+  if (failed === jobs.length) return false;
+  if (failed) $('ld-src').textContent = `${failed} tile(s) unavailable — those cells read 0 m (ABSENT)`;
+
+  const px = cx.getImageData(0,0,size,size).data;
+  DEM = new Int16Array(size*size);
+  for (let i = 0, p = 0; i < DEM.length; i++, p += 4)
+    DEM[i] = (px[p]*256 + px[p+1] + px[p+2]/256) - 32768;
+  DEM_N = size;
+  return true;
+};
+
+// bilinear sample, equirect lat/lon → Web Mercator raster
+const sampleH = (lat, lon) => {
+  if (!DEM_OK) return 0;
+  const LIM = 85.0511;
+  const la = Math.max(-LIM, Math.min(LIM, lat)) * d2r;   // ABSENT beyond → edge held
+  let fx = ((lon + 180) / 360) * DEM_N;
+  const my = 0.5 - Math.log(Math.tan(Math.PI/4 + la/2)) / (2*Math.PI);
+  let fy = my * DEM_N;
+  fx = ((fx % DEM_N) + DEM_N) % DEM_N;
+  fy = Math.max(0, Math.min(DEM_N - 1.001, fy));
+  const x0 = Math.floor(fx), y0 = Math.floor(fy);
+  const x1 = (x0 + 1) % DEM_N, y1 = Math.min(y0 + 1, DEM_N - 1);
+  const tx = fx - x0, ty = fy - y0;
+  const a = DEM[y0*DEM_N + x0], b = DEM[y0*DEM_N + x1];
+  const c = DEM[y1*DEM_N + x0], d = DEM[y1*DEM_N + x1];
+  return (a*(1-tx) + b*tx)*(1-ty) + (c*(1-tx) + d*tx)*ty;
+};
+
+// ── hypsometric ramp ──────────────────────────────────────
+const STOPS = [
+  [-11000, 0x06,0x0b,0x10], [-4000, 0x0d,0x18,0x22], [-200, 0x16,0x24,0x2e],
+  [0, 0x2a,0x23,0x16], [500, 0x5a,0x50,0x38], [1500, 0x9a,0x8c,0x6d],
+  [3000, 0xc8,0x90,0x50], [4500, 0xb0,0x5a,0x32], [6000, 0xd4,0xc5,0xa3], [8850, 0xff,0xf6,0xe4]
+];
+const tint = (h, out) => {
+  let i = 0;
+  while (i < STOPS.length - 2 && h > STOPS[i+1][0]) i++;
+  const a = STOPS[i], b = STOPS[i+1];
+  const t = Math.max(0, Math.min(1, (h - a[0]) / (b[0] - a[0])));
+  out[0] = (a[1] + (b[1]-a[1])*t) / 255;
+  out[1] = (a[2] + (b[2]-a[2])*t) / 255;
+  out[2] = (a[3] + (b[3]-a[3])*t) / 255;
+};
+$('ramp').style.background = 'linear-gradient(90deg,' +
+  STOPS.map(s => `rgb(${s[1]},${s[2]},${s[3]}) ${((s[0]+11000)/19850*100).toFixed(1)}%`).join(',') + ')';
+
+// ── three.js ──────────────────────────────────────────────
+const viz = $('viz'), canvas = $('gl');
+const size = () => ({ w: viz.clientWidth || 800, h: viz.clientHeight || 560 });
+const scene = new THREE.Scene();
+const { w:W0, h:H0 } = size();
+const camera = new THREE.PerspectiveCamera(38, W0/H0, 0.01, 200);
+camera.position.set(0, 0, 3.4);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+renderer.setSize(W0, H0, false);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const sun = new THREE.DirectionalLight(0xfff0d4, 1.15); sun.position.set(5,2.5,4); scene.add(sun);
+const rim = new THREE.DirectionalLight(0xb05a32, 0.35); rim.position.set(-5,-2,-3.5); scene.add(rim);
+
+// stars
+{
+  const g = new THREE.BufferGeometry(), p = new Float32Array(3500*3);
+  for (let i=0;i<3500;i++){
+    const th = Math.random()*Math.PI*2, ph = Math.acos(2*Math.random()-1);
+    p[i*3]=60*Math.sin(ph)*Math.cos(th); p[i*3+1]=60*Math.sin(ph)*Math.sin(th); p[i*3+2]=60*Math.cos(ph);
+  }
+  g.setAttribute('position', new THREE.BufferAttribute(p,3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color:0x6a5d3e, size:0.09, sizeAttenuation:true })));
+}
+
+const earth = new THREE.Group();
+scene.add(earth);
+
+const ll2v = (lat, lon, r) => {
+  const phi = (90-lat)*d2r, th = (lon+180)*d2r;
+  return new THREE.Vector3(-r*Math.sin(phi)*Math.cos(th), r*Math.cos(phi), r*Math.sin(phi)*Math.sin(th));
+};
+const v2ll = (v) => {
+  const lat = 90 - Math.acos(Math.max(-1,Math.min(1, v.y)))*r2d;
+  return [lat, Math.atan2(v.z, -v.x)*r2d - 180];
+};
+
+// ── terrain shell ─────────────────────────────────────────
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.innerWidth < 900);
+let shell = null, baseDir = null, vertH = null, DETAIL = isMobile ? 4 : 4; // medium, mobile-first
+let loading = false;
+
+const buildShell = (detail) => {
+  if (shell) { earth.remove(shell); shell.geometry.dispose(); shell.material.dispose(); }
+  const geo = new THREE.IcosahedronGeometry(1, detail);
+  const pos = geo.attributes.position;
+  const n = pos.count;
+  baseDir = new Float32Array(n*3);
+  vertH = new Float32Array(n);
+  const col = new Float32Array(n*3), rgb = [0,0,0];
+  const v = new THREE.Vector3();
+
+  for (let i = 0; i < n; i++) {
+    v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).normalize();
+    baseDir[i*3]=v.x; baseDir[i*3+1]=v.y; baseDir[i*3+2]=v.z;
+    const [lat, lon] = v2ll(v);
+    const h = sampleH(lat, lon);
+    vertH[i] = h;
+    tint(h, rgb);
+    col[i*3]=rgb[0]; col[i*3+1]=rgb[1]; col[i*3+2]=rgb[2];
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  shell = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
+    vertexColors:true, flatShading:true, shininess:4, specular:0x1a1510
+  }));
+  earth.add(shell);
+  // accurate face count for IcosahedronGeometry(detail)
+  const faces = 20 * Math.pow(4, detail);
+  $('m-faces').textContent = fmt(faces);
+  applyExag(+$('exag').value);
+};
+
+const applyExag = (ex) => {
+  if (!shell) return;
+  const pos = shell.geometry.attributes.position, n = pos.count;
+  const arr = pos.array, k = ex / R_E;
+  for (let i = 0; i < n; i++) {
+    const r = 1 + Math.max(vertH[i], -11000) * k;
+    arr[i*3]   = baseDir[i*3]   * r;
+    arr[i*3+1] = baseDir[i*3+1] * r;
+    arr[i*3+2] = baseDir[i*3+2] * r;
+  }
+  pos.needsUpdate = true;
+  shell.geometry.computeVertexNormals();
+  shell.geometry.computeBoundingSphere();
+  placeMarkers(ex);
+  $('r-exag').textContent = ex;
+};
+
+// ── sea datum · atmosphere · cage ─────────────────────────
+const sea = new THREE.Mesh(
+  new THREE.IcosahedronGeometry(1, 24),
+  new THREE.MeshPhongMaterial({ color:0x16242e, specular:0x39546a, shininess:60,
+    transparent:true, opacity:0.72, depthWrite:false })
+);
+sea.renderOrder = 1; earth.add(sea);
+
+const atmo = new THREE.Group(); earth.add(atmo);
+[[12000,0xc89050,0.16],[50000,0x6b7a3a,0.11],[100000,0xb05a32,0.09]].forEach(([m,c,o]) => {
+  const r = 1 + m*ATMO_SCALE/R_E;
+  atmo.add(new THREE.Mesh(
+    new THREE.IcosahedronGeometry(r, 12),
+    new THREE.MeshBasicMaterial({ color:c, wireframe:true, transparent:true, opacity:o, blending:THREE.AdditiveBlending, depthWrite:false })
+  ));
+});
+atmo.add(new THREE.Mesh(
+  new THREE.IcosahedronGeometry(1 + 130000*ATMO_SCALE/R_E, 32),
+  new THREE.MeshBasicMaterial({ color:0xc89050, transparent:true, opacity:0.06, side:THREE.BackSide, blending:THREE.AdditiveBlending, depthWrite:false })
+));
+
+const cage = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(1 + 150000*ATMO_SCALE/R_E, 1)),
+  new THREE.LineBasicMaterial({ color:0xc89050, transparent:true, opacity:0.22 })
+);
+earth.add(cage);
+
+// ── markers ───────────────────────────────────────────────
+const marks = new THREE.Group(); earth.add(marks);
+let obsPin, obsRing, ararCone, baseLine;
+
+const placeMarkers = (ex) => {
+  const hObs = DEM_OK ? sampleH(OBS.lat, OBS.lon) : OBS.h;
+  const hAra = DEM_OK ? sampleH(ARARAT.lat, ARARAT.lon) : ARARAT.h;
+  const rO = 1 + hObs*ex/R_E, rA = 1 + hAra*ex/R_E;
+  const pO = ll2v(OBS.lat, OBS.lon, rO + 0.004);
+  const pA = ll2v(ARARAT.lat, ARARAT.lon, rA + 0.004);
+
+  if (!obsPin) {
+    obsPin = new THREE.Mesh(new THREE.SphereGeometry(0.007, 16, 16), new THREE.MeshBasicMaterial({ color:0xffe6b0 }));
+    obsRing = new THREE.Mesh(new THREE.RingGeometry(0.014, 0.019, 40),
+      new THREE.MeshBasicMaterial({ color:0xc89050, transparent:true, opacity:0.7, side:THREE.DoubleSide }));
+    ararCone = new THREE.Mesh(new THREE.ConeGeometry(0.011, 0.032, 4),
+      new THREE.MeshPhongMaterial({ color:0x8c2e1c, emissive:0x3a1208, emissiveIntensity:0.5, flatShading:true }));
+    marks.add(obsPin, obsRing, ararCone);
+  }
+  obsPin.position.copy(pO);
+  obsRing.position.copy(pO); obsRing.lookAt(pO.clone().multiplyScalar(2));
+  ararCone.position.copy(pA); ararCone.lookAt(0,0,0); ararCone.rotateX(Math.PI/2);
+
+  if (baseLine) { marks.remove(baseLine); baseLine.geometry.dispose(); }
+  const pts = [];
+  for (let i = 0; i <= 48; i++) {
+    const t = i/48;
+    const lat = OBS.lat + (ARARAT.lat-OBS.lat)*t, lon = OBS.lon + (ARARAT.lon-OBS.lon)*t;
+    pts.push(ll2v(lat, lon, 1 + sampleH(lat,lon)*ex/R_E + 0.006));
+  }
+  baseLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineDashedMaterial({ color:0xb05a32, dashSize:0.012, gapSize:0.008 }));
+  baseLine.computeLineDistances();
+  marks.add(baseLine);
+};
+
+// ── readouts ──────────────────────────────────────────────
+const updateReadouts = () => {
+  const gsd = 40075017 / (256 * (1 << ZOOM));
+  $('s-gsd').textContent = (gsd/1000).toFixed(1) + ' km/px';
+  $('m-gsd').textContent = (gsd/1000).toFixed(1) + ' km/px';
+  $('s-zoom').textContent = 'z' + ZOOM;
+  $('s-grid').textContent = `${1<<ZOOM}×${1<<ZOOM}`;
+  $('s-raster').textContent = `${256*(1<<ZOOM)}²`;
+  $('m-dem').textContent = DEM_OK ? `terrarium z${ZOOM}` : 'unavailable';
+
+  if (!DEM_OK) {
+    ['s-obs','s-resid','s-arar','s-angle','r-obs'].forEach(i => $(i).textContent = 'ABSENT');
+    return;
+  }
+  const hO = sampleH(OBS.lat, OBS.lon), hA = sampleH(ARARAT.lat, ARARAT.lon);
+  $('s-obs').textContent = fmt(hO) + ' m';
+  $('r-obs').textContent = fmt(hO) + ' m';
+  const rs = hO - OBS.h;
+  $('s-resid').textContent = (rs >= 0 ? '+' : '') + fmt(rs) + ' m';
+  $('s-arar').textContent = fmt(hA) + ' m';
+  const ang = Math.atan2(hA - hO - NET_DEPRESSION, BASELINE_M) * r2d;
+  $('s-angle').textContent = ang.toFixed(2) + '°';
+};
+
+// ── device orientation ────────────────────────────────────
+const homeQ = new THREE.Quaternion().setFromUnitVectors(
+  ll2v(OBS.lat, OBS.lon, 1).normalize(), new THREE.Vector3(0.25, 0.35, 1).normalize()
+);
+earth.quaternion.copy(homeQ);
+
+let orientOn = false, refQ = null, targetQ = new THREE.Quaternion().copy(homeQ);
+const devQ = new THREE.Quaternion(), tmpQ = new THREE.Quaternion();
+const zAx = new THREE.Vector3(0,0,1);
+const qFlip = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
+const eul = new THREE.Euler();
+let screenAngle = 0;
+const readScreenAngle = () => {
+  screenAngle = (screen.orientation?.angle ?? window.orientation ?? 0) * d2r;
+};
+readScreenAngle();
+window.addEventListener('orientationchange', readScreenAngle);
+screen.orientation?.addEventListener?.('change', readScreenAngle);
+
+const onOrient = (e) => {
+  if (e.alpha == null) return;
+  $('g-a').textContent = e.alpha.toFixed(0) + '°';
+  $('g-b').textContent = e.beta.toFixed(0) + '°';
+  $('g-g').textContent = e.gamma.toFixed(0) + '°';
+  eul.set(e.beta*d2r, e.alpha*d2r, -e.gamma*d2r, 'YXZ');
+  devQ.setFromEuler(eul).multiply(qFlip).multiply(tmpQ.setFromAxisAngle(zAx, -screenAngle));
+  if (!refQ) refQ = devQ.clone();
+  // delta since calibration, inverted → shell turns opposite the phone
+  targetQ.copy(refQ).invert().multiply(devQ).invert().premultiply(homeQ);
+};
+
+const btn = $('orient-btn'), oStat = $('orient-status');
+$('recenter-btn')?.addEventListener('click', () => {
+  targetQ.copy(homeQ);
+  if (orientOn) { refQ = null; } // next orient sample becomes new zero
+  oStat.textContent = 'Recentred on Lake Yerevan · Ararat baseline';
+  oStat.className = 'status ok';
+  setTimeout(() => { if (!orientOn) { oStat.textContent = 'Tilt control off — drag to rotate'; oStat.className = 'status'; } }, 1800);
+});
+btn.addEventListener('click', async () => {
+  if (orientOn) {
+    orientOn = false; refQ = null;
+    window.removeEventListener('deviceorientation', onOrient);
+    btn.classList.remove('live'); btn.textContent = 'Use device tilt';
+    oStat.textContent = 'Tilt control off — drag to rotate'; oStat.className = 'status';
+    return;
+  }
+  const need = typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission;
+  if (need) {
+    try {
+      if (await DeviceOrientationEvent.requestPermission() !== 'granted') {
+        oStat.textContent = 'Motion access denied — drag to rotate'; oStat.className = 'status err'; return;
+      }
+    } catch {
+      oStat.textContent = 'Motion access unavailable — drag to rotate'; oStat.className = 'status err'; return;
+    }
+  } else if (!('DeviceOrientationEvent' in window)) {
+    oStat.textContent = 'No orientation sensor on this device'; oStat.className = 'status err'; return;
+  }
+  orientOn = true; refQ = null;
+  window.addEventListener('deviceorientation', onOrient);
+  btn.classList.add('live'); btn.textContent = 'Stop · recalibrate';
+  oStat.textContent = 'Live — current pose is the home view'; oStat.className = 'status ok';
+});
+
+// ── drag fallback ─────────────────────────────────────────
+let drag = false, px = 0, py = 0;
+const dragQ = new THREE.Quaternion();
+const down = (x,y) => { drag = true; px = x; py = y; };
+const move = (x,y) => {
+  if (!drag || orientOn) return;
+  dragQ.setFromAxisAngle(new THREE.Vector3(0,1,0), (x-px)*0.006);
+  targetQ.premultiply(dragQ);
+  dragQ.setFromAxisAngle(new THREE.Vector3(1,0,0), (y-py)*0.006);
+  targetQ.premultiply(dragQ);
+  px = x; py = y;
+};
+canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); down(e.clientX, e.clientY); });
+canvas.addEventListener('pointermove', e => move(e.clientX, e.clientY));
+canvas.addEventListener('pointerup', () => drag = false);
+canvas.addEventListener('pointercancel', () => drag = false);
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  camera.position.z = Math.max(1.45, Math.min(9, camera.position.z + e.deltaY*0.0016));
+}, { passive:false });
+
+// ── controls ──────────────────────────────────────────────
+$('exag').addEventListener('input', e => {
+  $('exag-v').textContent = '×' + e.target.value;
+  applyExag(+e.target.value);
+});
+document.querySelectorAll('[data-d]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-d]').forEach(o => o.setAttribute('aria-pressed', String(o === b)));
+  DETAIL = +b.dataset.d;
+  buildShell(DETAIL);
+}));
+document.querySelectorAll('[data-layer]').forEach(b => b.addEventListener('click', () => {
+  const on = b.getAttribute('aria-pressed') !== 'true';
+  b.setAttribute('aria-pressed', String(on));
+  ({ sea, atmo, cage })[b.dataset.layer].visible = on;
+}));
+document.querySelectorAll('[data-z]').forEach(b => b.addEventListener('click', async () => {
+  if (+b.dataset.z === ZOOM) return;
+  document.querySelectorAll('[data-z]').forEach(o => o.setAttribute('aria-pressed', String(o === b)));
+  ZOOM = +b.dataset.z;
+  await boot();
+}));
+
+// ── loop ──────────────────────────────────────────────────
+let t = 0;
+const tick = () => {
+  requestAnimationFrame(tick);
+  t += 0.016;
+  earth.quaternion.slerp(targetQ, orientOn ? 0.14 : 0.22);
+  if (obsRing) obsRing.material.opacity = 0.4 + 0.3*Math.sin(t*2.4);
+  atmo.rotation.y += 0.0004;
+  renderer.render(scene, camera);
+};
+tick();
+
+const clock = () => {
+  const d = new Date(), p = n => String(n).padStart(2,'0');
+  $('clock').textContent = `${d.getUTCFullYear()}.${p(d.getUTCMonth()+1)}.${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+};
+clock(); setInterval(clock, 1000);
+
+const resize = () => {
+  const { w,h } = size();
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(w, h, false);
+};
+new ResizeObserver(resize).observe(viz);
+
+// ── boot ──────────────────────────────────────────────────
+async function boot() {
+  if (loading) return;
+  loading = true;
+  const ld = $('loader');
+  ld.classList.remove('gone');
+  $('ld-bar').style.width = '0%';
+  $('ld-src').textContent = 'Terrarium RGB · GMTED2010 land + ETOPO1 bathymetry · AWS Open Data';
+  DEM_OK = await loadDEM(ZOOM);
+  if (!DEM_OK) {
+    $('ld-src').innerHTML = 'Elevation service unreachable — shell held at datum radius. All relief reads ABSENT.';
+    $('m-dem').textContent = 'unreachable';
+  }
+  updateReadouts();
+  buildShell(DETAIL);
+  setTimeout(() => { ld.classList.add('gone'); loading = false; }, DEM_OK ? 350 : 2200);
+}
+boot();
+</script>
+</body>
+</html>
