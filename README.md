@@ -37,6 +37,31 @@ Live: https://artsrun.github.io/earth-volume/ (or raw `index.html`)
 
 ---
 
+## Code review (v2 → v2.1)
+
+Interaction and lifecycle pass over the v2 shell. No change to the physics, the
+sampling, or the frozen constants — the numbers on screen are the same numbers.
+
+| Issue | Fix |
+|-------|-----|
+| The header promised “drag / pinch as fallback”, but only `wheel` was bound — a phone with motion permission denied had **no way to zoom at all** | Two-finger pinch dolly on the pointer-event path; two pointers dolly and never rotate |
+| Shell unreachable without a pointer | Canvas is focusable, labelled, and driven by arrow keys (shift = coarse) with `+` / `−` to dolly |
+| `placeMarkers()` built a fresh `Line` + `LineDashedMaterial` per call and disposed only the geometry — the exaggeration slider runs it ~60×/s | Baseline geometry is written in place; one material for the life of the page. One 200-step sweep: **200 → 0** leaked materials, **200 → 0** orphan `Line` objects |
+| Every slider tick recomputed 20k-face normals synchronously | One `applyExag` per animation frame (`computeVertexNormals` **200 → 1** over the same sweep) |
+| A throw inside `loadDEM` (tainted canvas, or the z4 4096² raster failing to allocate on a small device) left `loading = true` and the loader overlay up **forever** | `boot()` wrapped in try/finally; the failure is reported in the loader line and the shell falls back to datum radius |
+| A second zoom click during a load mutated `ZOOM` under the in-flight `boot()` — readouts then labelled a z2 raster as “terrarium z4 · 9.8 km/px” | Zoom/detail buttons ignore clicks and disable while `loading` |
+| `deviceorientation` with a partial sensor (`beta`/`gamma` null) threw inside the handler | All three angles guarded |
+| `prefers-reduced-motion` only stopped CSS transitions; the ring kept pulsing and the atmosphere kept spinning | Honoured in the render loop too — steady ring, still atmosphere, instant slerp |
+| Dead `DETAIL = isMobile ? 4 : 4` | Removed; `isMobile` now caps device pixel ratio at 1.75 (3× DPR + additive shells is what melts phone GPUs) |
+| z3 → z4 held both rasters live during decode | Previous `Int16Array` released before the next allocation |
+
+Verified headless (Chromium/Playwright) against cached z2/z3 Terrarium tiles: boot,
+sampling readouts, all three detail levels, layer toggles, keyboard and pinch paths,
+the total-tile-failure path (z4 aborted → `ABSENT`, loader recovers), and recovery
+back to z3.
+
+---
+
 ## Field constants (frozen)
 - Observer: 40.177°N 44.487°E · declared 895 m (SW shore Erebuni / Lake Yerevan)
 - Ararat summit: 39.702°N 44.396°E · declared 5 137 m
@@ -50,6 +75,8 @@ Sampled heights and the derived angle come from the DEM raster; any residual is 
 ## Controls
 - **Use device tilt** — live orientation (recalibrate by stopping/starting)
 - **Recenter** — snap back to the Yerevan home quaternion
+- **Drag** to rotate · **pinch** or **scroll** to dolly
+- **Keyboard** — focus the shell, arrows rotate (shift = coarse), `+` / `−` dolly
 - Relief exaggeration slider (declared display scale)
 - Shell subdivision (coarse / medium / fine)
 - Layer toggles: sea datum / atmosphere / cage

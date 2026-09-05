@@ -50,6 +50,8 @@ body::before{
 
 .viz{position:relative;border:1px solid var(--hairline);background:#070906;overflow:hidden;min-height:min(62vh,560px);touch-action:none}
 #gl{display:block;width:100%;height:100%}
+#gl:focus{outline:none}
+#gl:focus-visible{outline:1px solid var(--ochre);outline-offset:-3px}
 .crop{position:absolute;width:16px;height:16px;border-color:var(--ochre);border-style:solid;z-index:3;pointer-events:none}
 .crop.tl{top:9px;left:9px;border-width:1px 0 0 1px}
 .crop.tr{top:9px;right:9px;border-width:1px 1px 0 0}
@@ -100,6 +102,7 @@ input[type=range]::-moz-range-thumb{width:3px;height:22px;background:var(--ochre
 .seg button:hover{background:var(--stone-2);color:var(--bone)}
 .seg button[aria-pressed=true]{background:var(--oxide);color:var(--bone)}
 .seg button:focus-visible{outline:2px solid var(--ochre);outline-offset:-2px}
+.seg button[disabled]{opacity:.45;cursor:progress}
 
 .btn-wide{width:100%;padding:13px;background:var(--stone);border:1px solid var(--ochre);color:var(--ochre);font:inherit;font-size:11px;font-weight:600;letter-spacing:2.6px;text-transform:uppercase;cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:background .15s,color .15s}
 .btn-wide:hover{background:var(--ochre);color:var(--bg)}
@@ -153,7 +156,8 @@ input[type=range]::-moz-range-thumb{width:3px;height:22px;background:var(--ochre
 
   <main class="main">
     <div class="viz" id="viz">
-      <canvas id="gl"></canvas>
+      <canvas id="gl" tabindex="0" role="img"
+        aria-label="Geodesic Earth shell displaced by measured elevation. Drag or press the arrow keys to rotate; pinch, scroll or press plus and minus to zoom."></canvas>
       <div class="crop tl"></div><div class="crop tr"></div>
       <div class="crop bl"></div><div class="crop br"></div>
 
@@ -285,6 +289,10 @@ const $ = id => document.getElementById(id);
 const d2r = Math.PI/180, r2d = 180/Math.PI;
 const fmt = n => n.toLocaleString('en-US',{maximumFractionDigits:0});
 
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.innerWidth < 900);
+const DPR_CAP = isMobile ? 1.75 : 2;   // phone GPUs choke on 3× DPR + additive shells
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
 // ── DEM store ─────────────────────────────────────────────
 let DEM = null, DEM_N = 0, DEM_OK = false, ZOOM = 3;
 
@@ -305,6 +313,7 @@ const pool = async (items, n, fn) => {
 
 const loadDEM = async (z) => {
   const n = 1 << z, size = 256 * n;
+  DEM = null;                                  // release the previous raster before allocating the next
   const cv = document.createElement('canvas');
   cv.width = cv.height = size;
   const cx = cv.getContext('2d', { willReadFrequently: true });
@@ -380,7 +389,7 @@ const camera = new THREE.PerspectiveCamera(38, W0/H0, 0.01, 200);
 camera.position.set(0, 0, 3.4);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
 renderer.setSize(W0, H0, false);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, DPR_CAP));
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 const sun = new THREE.DirectionalLight(0xfff0d4, 1.15); sun.position.set(5,2.5,4); scene.add(sun);
@@ -410,8 +419,7 @@ const v2ll = (v) => {
 };
 
 // ── terrain shell ─────────────────────────────────────────
-const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.innerWidth < 900);
-let shell = null, baseDir = null, vertH = null, DETAIL = isMobile ? 4 : 4; // medium, mobile-first
+let shell = null, baseDir = null, vertH = null, DETAIL = 4; // medium, mobile-first
 let loading = false;
 
 const buildShell = (detail) => {
@@ -491,6 +499,7 @@ earth.add(cage);
 // ── markers ───────────────────────────────────────────────
 const marks = new THREE.Group(); earth.add(marks);
 let obsPin, obsRing, ararCone, baseLine;
+const BASE_SEGS = 48;
 
 const placeMarkers = (ex) => {
   const hObs = DEM_OK ? sampleH(OBS.lat, OBS.lon) : OBS.h;
@@ -511,17 +520,24 @@ const placeMarkers = (ex) => {
   obsRing.position.copy(pO); obsRing.lookAt(pO.clone().multiplyScalar(2));
   ararCone.position.copy(pA); ararCone.lookAt(0,0,0); ararCone.rotateX(Math.PI/2);
 
-  if (baseLine) { marks.remove(baseLine); baseLine.geometry.dispose(); }
-  const pts = [];
-  for (let i = 0; i <= 48; i++) {
-    const t = i/48;
-    const lat = OBS.lat + (ARARAT.lat-OBS.lat)*t, lon = OBS.lon + (ARARAT.lon-OBS.lon)*t;
-    pts.push(ll2v(lat, lon, 1 + sampleH(lat,lon)*ex/R_E + 0.006));
+  // baseline is rewritten in place — the slider fires ~60×/s, and a fresh
+  // Line + LineDashedMaterial per call leaked both (only the geometry was disposed)
+  if (!baseLine) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array((BASE_SEGS+1)*3), 3));
+    baseLine = new THREE.Line(g, new THREE.LineDashedMaterial({ color:0xb05a32, dashSize:0.012, gapSize:0.008 }));
+    marks.add(baseLine);
   }
-  baseLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
-    new THREE.LineDashedMaterial({ color:0xb05a32, dashSize:0.012, gapSize:0.008 }));
+  const bp = baseLine.geometry.attributes.position;
+  for (let i = 0; i <= BASE_SEGS; i++) {
+    const t = i/BASE_SEGS;
+    const lat = OBS.lat + (ARARAT.lat-OBS.lat)*t, lon = OBS.lon + (ARARAT.lon-OBS.lon)*t;
+    const p = ll2v(lat, lon, 1 + sampleH(lat,lon)*ex/R_E + 0.006);
+    bp.setXYZ(i, p.x, p.y, p.z);
+  }
+  bp.needsUpdate = true;
+  baseLine.geometry.computeBoundingSphere();
   baseLine.computeLineDistances();
-  marks.add(baseLine);
 };
 
 // ── readouts ──────────────────────────────────────────────
@@ -568,7 +584,7 @@ window.addEventListener('orientationchange', readScreenAngle);
 screen.orientation?.addEventListener?.('change', readScreenAngle);
 
 const onOrient = (e) => {
-  if (e.alpha == null) return;
+  if (e.alpha == null || e.beta == null || e.gamma == null) return; // partial sensor → don't throw in the handler
   $('g-a').textContent = e.alpha.toFixed(0) + '°';
   $('g-b').textContent = e.beta.toFixed(0) + '°';
   $('g-g').textContent = e.gamma.toFixed(0) + '°';
@@ -613,34 +629,80 @@ btn.addEventListener('click', async () => {
   oStat.textContent = 'Live — current pose is the home view'; oStat.className = 'status ok';
 });
 
-// ── drag fallback ─────────────────────────────────────────
-let drag = false, px = 0, py = 0;
+// ── drag · pinch · keyboard fallback ──────────────────────
+const ptrs = new Map();
+let px = 0, py = 0, pinchD = 0;
 const dragQ = new THREE.Quaternion();
-const down = (x,y) => { drag = true; px = x; py = y; };
-const move = (x,y) => {
-  if (!drag || orientOn) return;
-  dragQ.setFromAxisAngle(new THREE.Vector3(0,1,0), (x-px)*0.006);
-  targetQ.premultiply(dragQ);
-  dragQ.setFromAxisAngle(new THREE.Vector3(1,0,0), (y-py)*0.006);
-  targetQ.premultiply(dragQ);
-  px = x; py = y;
+const axY = new THREE.Vector3(0,1,0), axX = new THREE.Vector3(1,0,0);
+
+const rotateBy = (dx, dy) => {
+  dragQ.setFromAxisAngle(axY, dx*0.006); targetQ.premultiply(dragQ);
+  dragQ.setFromAxisAngle(axX, dy*0.006); targetQ.premultiply(dragQ);
 };
-canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); down(e.clientX, e.clientY); });
-canvas.addEventListener('pointermove', e => move(e.clientX, e.clientY));
-canvas.addEventListener('pointerup', () => drag = false);
-canvas.addEventListener('pointercancel', () => drag = false);
-canvas.addEventListener('wheel', e => {
-  e.preventDefault();
-  camera.position.z = Math.max(1.45, Math.min(9, camera.position.z + e.deltaY*0.0016));
-}, { passive:false });
+const dollyBy = (dz) => {
+  camera.position.z = Math.max(1.45, Math.min(9, camera.position.z + dz));
+};
+const pinchDist = () => {
+  const [a, b] = [...ptrs.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y);
+};
+
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, { x:e.clientX, y:e.clientY });
+  px = e.clientX; py = e.clientY;
+  if (ptrs.size === 2) pinchD = pinchDist();
+});
+canvas.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId)) return;
+  ptrs.set(e.pointerId, { x:e.clientX, y:e.clientY });
+  if (ptrs.size >= 2) {                       // two fingers = dolly, never rotate
+    const d = pinchDist();
+    if (pinchD) dollyBy((pinchD - d) * 0.012);
+    pinchD = d;
+    return;
+  }
+  if (orientOn) return;
+  rotateBy(e.clientX - px, e.clientY - py);
+  px = e.clientX; py = e.clientY;
+});
+const ptrUp = e => {
+  ptrs.delete(e.pointerId);
+  if (ptrs.size < 2) pinchD = 0;
+  if (ptrs.size === 1) { const p = [...ptrs.values()][0]; px = p.x; py = p.y; } // no jump when one finger lifts
+};
+canvas.addEventListener('pointerup', ptrUp);
+canvas.addEventListener('pointercancel', ptrUp);
+canvas.addEventListener('wheel', e => { e.preventDefault(); dollyBy(e.deltaY*0.0016); }, { passive:false });
+
+const KEY_ROT = { ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1] };
+canvas.addEventListener('keydown', e => {
+  const r = KEY_ROT[e.key];
+  if (r) { const s = e.shiftKey ? 40 : 14; rotateBy(r[0]*s, r[1]*s); e.preventDefault(); return; }
+  if (e.key === '+' || e.key === '=') { dollyBy(-0.3); e.preventDefault(); }
+  else if (e.key === '-' || e.key === '_') { dollyBy(0.3); e.preventDefault(); }
+});
 
 // ── controls ──────────────────────────────────────────────
+// slider fires faster than a frame; one rebuild per frame is enough
+let exagQueued = null;
+const queueExag = v => {
+  const idle = exagQueued === null;
+  exagQueued = v;
+  if (idle) requestAnimationFrame(() => { const x = exagQueued; exagQueued = null; applyExag(x); });
+};
 $('exag').addEventListener('input', e => {
   $('exag-v').textContent = '×' + e.target.value;
-  applyExag(+e.target.value);
+  queueExag(+e.target.value);
 });
-document.querySelectorAll('[data-d]').forEach(b => b.addEventListener('click', () => {
-  document.querySelectorAll('[data-d]').forEach(o => o.setAttribute('aria-pressed', String(o === b)));
+
+const zoomBtns = [...document.querySelectorAll('[data-z]')];
+const detailBtns = [...document.querySelectorAll('[data-d]')];
+const setBusy = on => [...zoomBtns, ...detailBtns].forEach(b => b.disabled = on);
+
+detailBtns.forEach(b => b.addEventListener('click', () => {
+  if (loading) return;
+  detailBtns.forEach(o => o.setAttribute('aria-pressed', String(o === b)));
   DETAIL = +b.dataset.d;
   buildShell(DETAIL);
 }));
@@ -649,9 +711,9 @@ document.querySelectorAll('[data-layer]').forEach(b => b.addEventListener('click
   b.setAttribute('aria-pressed', String(on));
   ({ sea, atmo, cage })[b.dataset.layer].visible = on;
 }));
-document.querySelectorAll('[data-z]').forEach(b => b.addEventListener('click', async () => {
-  if (+b.dataset.z === ZOOM) return;
-  document.querySelectorAll('[data-z]').forEach(o => o.setAttribute('aria-pressed', String(o === b)));
+zoomBtns.forEach(b => b.addEventListener('click', async () => {
+  if (loading || +b.dataset.z === ZOOM) return;   // a queued click must not relabel the readouts
+  zoomBtns.forEach(o => o.setAttribute('aria-pressed', String(o === b)));
   ZOOM = +b.dataset.z;
   await boot();
 }));
@@ -661,9 +723,10 @@ let t = 0;
 const tick = () => {
   requestAnimationFrame(tick);
   t += 0.016;
-  earth.quaternion.slerp(targetQ, orientOn ? 0.14 : 0.22);
-  if (obsRing) obsRing.material.opacity = 0.4 + 0.3*Math.sin(t*2.4);
-  atmo.rotation.y += 0.0004;
+  const still = reduceMotion.matches;
+  earth.quaternion.slerp(targetQ, still ? 1 : (orientOn ? 0.14 : 0.22));
+  if (obsRing) obsRing.material.opacity = still ? 0.7 : 0.4 + 0.3*Math.sin(t*2.4);
+  if (!still) atmo.rotation.y += 0.0004;
   renderer.render(scene, camera);
 };
 tick();
@@ -677,7 +740,7 @@ clock(); setInterval(clock, 1000);
 const resize = () => {
   const { w,h } = size();
   camera.aspect = w/h; camera.updateProjectionMatrix();
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(devicePixelRatio, DPR_CAP));
   renderer.setSize(w, h, false);
 };
 new ResizeObserver(resize).observe(viz);
@@ -685,19 +748,27 @@ new ResizeObserver(resize).observe(viz);
 // ── boot ──────────────────────────────────────────────────
 async function boot() {
   if (loading) return;
-  loading = true;
+  loading = true; setBusy(true);
   const ld = $('loader');
   ld.classList.remove('gone');
   $('ld-bar').style.width = '0%';
   $('ld-src').textContent = 'Terrarium RGB · GMTED2010 land + ETOPO1 bathymetry · AWS Open Data';
-  DEM_OK = await loadDEM(ZOOM);
-  if (!DEM_OK) {
-    $('ld-src').innerHTML = 'Elevation service unreachable — shell held at datum radius. All relief reads ABSENT.';
+  try {
+    DEM_OK = await loadDEM(ZOOM);
+    if (!DEM_OK) {
+      $('ld-src').textContent = 'Elevation service unreachable — shell held at datum radius. All relief reads ABSENT.';
+      $('m-dem').textContent = 'unreachable';
+    }
+  } catch (err) {
+    // tainted canvas, or the z4 raster (4096²) failing to allocate on a small device
+    DEM_OK = false;
+    $('ld-src').textContent = `Elevation raster could not be decoded (${err && err.name || 'error'}) — shell held at datum radius.`;
     $('m-dem').textContent = 'unreachable';
   }
-  updateReadouts();
-  buildShell(DETAIL);
-  setTimeout(() => { ld.classList.add('gone'); loading = false; }, DEM_OK ? 350 : 2200);
+  try { updateReadouts(); buildShell(DETAIL); }
+  finally {
+    setTimeout(() => { ld.classList.add('gone'); loading = false; setBusy(false); }, DEM_OK ? 350 : 2200);
+  }
 }
 boot();
 </script>
