@@ -246,16 +246,18 @@ input[type=range]::-moz-range-thumb{width:3px;height:22px;background:var(--ochre
       <div class="section">
         <div class="section-head"><span class="num">§05</span><span class="title">Ararat baseline</span><span class="fig">FIG.6</span></div>
         <div class="rows">
-          <div class="row"><span class="k">Ground distance</span><span class="v">53.38 km</span>
-            <span class="sub"><span class="tag c">constant</span> haversine, field report §02</span></div>
+          <div class="row"><span class="k">Ground distance</span><span class="v" id="s-base">—</span>
+            <span class="sub"><span class="tag d">derived</span> haversine to the summit · field report §02 read 53.38 km (<span id="s-base-d">—</span>, old coordinate)</span></div>
           <div class="row"><span class="k">Summit, declared</span><span class="v">5,137 m</span>
             <span class="sub"><span class="tag c">constant</span> Masis</span></div>
           <div class="row"><span class="k">Summit, sampled</span><span class="v hot" id="s-arar">—</span>
-            <span class="sub"><span class="tag m">measured</span> at 39.702°N 44.396°E</span></div>
-          <div class="row"><span class="k">Elevation angle</span><span class="v">4.34°</span>
-            <span class="sub"><span class="tag c">constant</span> curvature + refraction corrected</span></div>
+            <span class="sub"><span class="tag m">measured</span> at 39.7019°N 44.2986°E — DEM local maximum of the massif</span></div>
+          <div class="row"><span class="k">Elevation angle, declared h</span><span class="v" id="s-ang-dec">—</span>
+            <span class="sub"><span class="tag d">derived</span> exact spherical, refraction k=0.13 · field report §02 read 4.34° to the old coordinate</span></div>
           <div class="row"><span class="k">Angle from DEM</span><span class="v" id="s-angle">—</span>
-            <span class="sub"><span class="tag d">derived</span> same correction, sampled heights — the gap is the raster, not the mountain</span></div>
+            <span class="sub"><span class="tag d">derived</span> same correction, sampled heights</span></div>
+          <div class="row"><span class="k">Refraction band</span><span class="v warn" id="s-angle-k" style="font-size:11px">—</span>
+            <span class="sub"><span class="tag x">declared</span> k = 0.07 … 0.25 — refraction dominates every geometric term by ~14×</span></div>
         </div>
       </div>
     </aside>
@@ -279,9 +281,26 @@ input[type=range]::-moz-range-thumb{width:3px;height:22px;background:var(--ochre
 // ── constants ─────────────────────────────────────────────
 const R_E = 6371000;                 // m, mean radius — CONSTANT
 const OBS = { lat: 40.177, lon: 44.487, h: 895 };        // CONSTANT §01
-const ARARAT = { lat: 39.702, lon: 44.396, h: 5137 };    // CONSTANT §02
-const BASELINE_M = 53384;            // CONSTANT §02
-const NET_DEPRESSION = 194.6;        // CONSTANT §02 (curvature − refraction)
+// Summit of Masis, recovered as the DEM's own local maximum over the massif
+// (z14 search: 5,111 m at 39.7019/44.2986 — 27 m from the declared 5,137).
+// The field report's 39.702/44.396 sits 8.33 km east on the flank and samples 2,363 m.
+const ARARAT = { lat: 39.7019, lon: 44.2986, h: 5137 };  // CONSTANT §02
+const FIELD_BASELINE_M = 53384;      // CONSTANT §02 — measured to the old coordinate
+const FIELD_ANGLE_DEG = 4.34;        // CONSTANT §02 — computed from it
+const REFRACTION_K = 0.13;           // DECLARED standard coefficient of refraction
+
+// great-circle distance, mean radius — DERIVED, no longer frozen
+const haversine = (p, q) => {
+  const la1 = p.lat*d2r, la2 = q.lat*d2r;
+  const s = Math.sin((la2-la1)/2)**2 +
+            Math.cos(la1)*Math.cos(la2)*Math.sin((q.lon-p.lon)*d2r/2)**2;
+  return 2*R_E*Math.asin(Math.sqrt(s));
+};
+// exact elevation angle on an effective-radius sphere (refraction folded into R)
+const elevAngle = (d, h1, h2, k = REFRACTION_K) => {
+  const Rp = R_E/(1-k), th = d/Rp, r1 = Rp+h1, r2 = Rp+h2;
+  return Math.atan2(r2*Math.cos(th) - r1, r2*Math.sin(th)) * r2d;
+};
 const ATMO_SCALE = 8;                // DECLARED display scale for air layers
 const TILE_URL = (z,x,y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
 
@@ -541,7 +560,12 @@ const placeMarkers = (ex) => {
 };
 
 // ── readouts ──────────────────────────────────────────────
+const BASELINE_M = haversine(OBS, ARARAT);   // DERIVED
+
 const updateReadouts = () => {
+  $('s-base').textContent = (BASELINE_M/1000).toFixed(2) + ' km';
+  $('s-base-d').textContent = ((BASELINE_M - FIELD_BASELINE_M)/1000).toFixed(2) + ' km';
+  $('s-ang-dec').textContent = elevAngle(BASELINE_M, OBS.h, ARARAT.h).toFixed(2) + '°';
   const gsd = 40075017 / (256 * (1 << ZOOM));
   $('s-gsd').textContent = (gsd/1000).toFixed(1) + ' km/px';
   $('m-gsd').textContent = (gsd/1000).toFixed(1) + ' km/px';
@@ -551,7 +575,7 @@ const updateReadouts = () => {
   $('m-dem').textContent = DEM_OK ? `terrarium z${ZOOM}` : 'unavailable';
 
   if (!DEM_OK) {
-    ['s-obs','s-resid','s-arar','s-angle','r-obs'].forEach(i => $(i).textContent = 'ABSENT');
+    ['s-obs','s-resid','s-arar','s-angle','s-angle-k','r-obs'].forEach(i => $(i).textContent = 'ABSENT');
     return;
   }
   const hO = sampleH(OBS.lat, OBS.lon), hA = sampleH(ARARAT.lat, ARARAT.lon);
@@ -560,8 +584,10 @@ const updateReadouts = () => {
   const rs = hO - OBS.h;
   $('s-resid').textContent = (rs >= 0 ? '+' : '') + fmt(rs) + ' m';
   $('s-arar').textContent = fmt(hA) + ' m';
-  const ang = Math.atan2(hA - hO - NET_DEPRESSION, BASELINE_M) * r2d;
-  $('s-angle').textContent = ang.toFixed(2) + '°';
+  $('s-angle').textContent = elevAngle(BASELINE_M, hO, hA).toFixed(2) + '°';
+  // uncertainty band: refraction, not geometry, dominates (k = 0.07 … 0.25)
+  $('s-angle-k').textContent =
+    `${elevAngle(BASELINE_M, hO, hA, 0.07).toFixed(2)}° … ${elevAngle(BASELINE_M, hO, hA, 0.25).toFixed(2)}°`;
 };
 
 // ── device orientation ────────────────────────────────────
