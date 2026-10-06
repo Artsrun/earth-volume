@@ -123,6 +123,53 @@ Verified non-issue: the canvas decode path is byte-exact — the tiles carry no
 
 ---
 
+## Line of sight (v2.3)
+
+The question the project is actually about — *is Masis above the horizon from
+that shore?* — was never computed. Endpoint arithmetic cannot answer it; the
+terrain between can stand in the way.
+
+On the effective-radius sphere the ray is straight and refraction lives in R′,
+so the ray height at central angle θ follows from the sine rule:
+
+```
+r = (R′ + h₁) · cos α / cos(θ + α)        α = elevation angle to the summit
+```
+
+Walk the great circle at z12 (29 m/px), 512 points, and take the deepest
+intrusion of terrain into that ray. Only the tiles the line crosses are
+fetched — **10 tiles** for a 55 km baseline.
+
+```
+verdict                CLEAR
+minimum clearance      +6 m at 0.11 km  (terrain 1,000 m)
+clearance, open window  +122 m at 1.1 km
+```
+
+The binding constraint is **the observer's own bank, 110 m away** — which is the
+same +103 m of terrain that the §04 residual reports, showing up a second time
+as a grazing limit. Beyond it nothing intervenes. The result holds across the
+whole plausible refraction range (k = 0.07 … 0.25 moves the open-window figure
+by 1 m), so it is not a refraction artefact. The ray meets the ground at both
+ends by construction, so the intervening terrain is judged over an open window
+1 km clear of each.
+
+Also in this pass:
+
+- The baseline polyline **slerps the unit vectors** instead of lerping lat/lon,
+  and the straight sight ray is drawn beside the terrain profile.
+- The shell is the **WGS84 spheroid**. An oblate spheroid is a sphere scaled
+  along its polar axis, so one scale gives the exact figure — and it matters:
+  a − b is 21,385 m, **2.4× Everest**, so at ×1 relief the flattening is the
+  dominant shape signal and it was missing.
+- The point probe and the profile now share one tile-level sampler, so each
+  tile is fetched and decoded once whoever asks for it.
+
+Cross-checked against an independent implementation (pure-Python PNG decode,
+same formulas): identical to the metre.
+
+---
+
 ## Field constants (frozen)
 - Observer: 40.177°N 44.487°E · declared 895 m (SW shore Erebuni / Lake Yerevan)
 - Ararat summit: 39.702°N 44.396°E · declared 5 137 m

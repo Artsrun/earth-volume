@@ -202,7 +202,7 @@ input[type=range]::-moz-range-thumb{width:3px;height:22px;background:var(--ochre
         <div class="section-head"><span class="num">§02</span><span class="title">Volume parameters</span><span class="fig">FIG.3</span></div>
         <label class="ctl" for="exag">Relief exaggeration <b id="exag-v">×60</b></label>
         <input type="range" id="exag" min="1" max="200" value="60" step="1">
-        <div class="sub" style="font-size:9px;color:var(--bone-dim);letter-spacing:.6px"><span class="tag x">declared</span> display scale — true relief is ×1 (8,848 m over 6,371 km)</div>
+        <div class="sub" style="font-size:9px;color:var(--bone-dim);letter-spacing:.6px"><span class="tag x">declared</span> display scale — true relief is ×1 (8,848 m over 6,371 km). The shell is the WGS84 spheroid at ×1: flattening is 21,385 m, <b>2.4× Everest</b>.</div>
         <label class="ctl">Shell subdivision</label>
         <div class="seg" role="group" aria-label="Shell subdivision">
           <button data-d="3" aria-pressed="false">coarse · 1.3k</button>
@@ -260,11 +260,26 @@ input[type=range]::-moz-range-thumb{width:3px;height:22px;background:var(--ochre
             <span class="sub"><span class="tag x">declared</span> k = 0.07 … 0.25 — refraction dominates every geometric term by ~14×</span></div>
         </div>
       </div>
+      <div class="section">
+        <div class="section-head"><span class="num">§06</span><span class="title">Line of sight</span><span class="fig">FIG.7</span></div>
+        <div class="rows">
+          <div class="row"><span class="k">Masis from the shore</span><span class="v hot" id="s-los">—</span>
+            <span class="sub"><span class="tag d">derived</span> deepest intrusion of terrain into the observer→summit ray</span></div>
+          <div class="row"><span class="k">Minimum clearance</span><span class="v" id="s-los-c">—</span>
+            <span class="sub"><span class="tag d">derived</span> ray height − terrain height, refraction k=0.13</span></div>
+          <div class="row"><span class="k">Limiting point</span><span class="v" id="s-los-at" style="font-size:11px">—</span>
+            <span class="sub"><span class="tag m">measured</span> along the great circle, not a lat/lon lerp</span></div>
+          <div class="row"><span class="k">Clearance, open window</span><span class="v" id="s-los-far" style="font-size:11px">—</span>
+            <span class="sub"><span class="tag d">derived</span> open window, 1 km clear of both ends — the ray meets the ground there by construction</span></div>
+          <div class="row"><span class="k">Profile</span><span class="v" id="s-los-n" style="font-size:11px">—</span>
+            <span class="sub"><span class="tag m">measured</span> native-zoom tiles, fetched only where the line runs</span></div>
+        </div>
+      </div>
     </aside>
   </main>
 
   <div class="legend">
-    <div class="legend-head"><span><span class="num">§06</span> &nbsp; Hypsometric scale</span><span id="lg-range">−11,000 m → 8,850 m</span></div>
+    <div class="legend-head"><span><span class="num">§07</span> &nbsp; Hypsometric scale</span><span id="lg-range">−11,000 m → 8,850 m</span></div>
     <div class="ramp" id="ramp"></div>
     <div class="ramp-lab"><span>−11 km</span><span>−200 m</span><span>0</span><span>1.5 km</span><span>3 km</span><span>4.5 km</span><span>6 km+</span></div>
     <div class="prov">
@@ -383,39 +398,81 @@ const sampleH = (lat, lon) => {
   return (a*(1-tx) + b*tx)*(1-ty) + (c*(1-tx) + d*tx)*ty;
 };
 
-// ── native-zoom point probe ───────────────────────────────
+// ── tile-level sampler (shared by the point probe and the sight-line profile) ──
 // The shell raster is a mesh-scale product: at z3 one cell is 19.6 km and the
 // pyramid is MEAN-aggregated, so summits are averaged away (Masis reads 2.7 km
-// at z3, 5.1 km at z14). The named field points get their own 4-tile fetch at
-// native zoom instead of raising the global zoom — 4 tiles, not 65,536.
-const PROBE_Z = 13;                       // 15.0 m/px at 40°N
-const probeCache = new Map();
+// at z3, 5.1 km at z14). Anything that needs a real elevation reads a tile at
+// native zoom instead of raising the global zoom.
+const PROBE_Z   = 13;                     // 14.6 m/px at 40°N — named field points
+const PROFILE_Z = 12;                     // 29.2 m/px — sight-line profile
+const PROFILE_N = 512;                    // ~108 m along a 55 km baseline
+
+const tiles = new Map();                  // "z/x/y" → Int16Array(65536) | null
+
+const tileKey = (z,x,y) => `${z}/${x}/${y}`;
+const mercPx = (lat, lon, z) => {
+  const n = (1 << z) * 256;
+  const la = Math.max(-85.0511, Math.min(85.0511, lat)) * d2r;
+  return [ ((lon + 180)/360) * n,
+           (0.5 - Math.log(Math.tan(Math.PI/4 + la/2))/(2*Math.PI)) * n ];
+};
+
+const fetchTile = async (z, x, y) => {
+  const n = 1 << z;
+  x = ((x % n) + n) % n; y = Math.max(0, Math.min(n - 1, y));
+  const k = tileKey(z,x,y);
+  if (tiles.has(k)) return tiles.get(k);
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 256;
+  const cx = cv.getContext('2d', { willReadFrequently: true });
+  let out = null;
+  try {
+    cx.drawImage(await loadImg(TILE_URL(z,x,y)), 0, 0);
+    const px = cx.getImageData(0,0,256,256).data;
+    out = new Int16Array(65536);
+    for (let i = 0, q = 0; i < 65536; i++, q += 4)
+      out[i] = Math.round((px[q]*256 + px[q+1] + px[q+2]/256) - 32768);
+  } catch { out = null; }
+  tiles.set(k, out);
+  return out;
+};
+
+// every distinct tile touched by these points, fetched once, 8 at a time
+const ensureTiles = async (pts, z) => {
+  const want = new Map();
+  const n = 1 << z;
+  for (const [lat, lon] of pts) {
+    const [fx, fy] = mercPx(lat, lon, z);
+    for (const dx of [-1, 1]) for (const dy of [-1, 1]) {
+      const tx = Math.floor((fx + dx*0.5)/256), ty = Math.floor((fy + dy*0.5)/256);
+      const k = tileKey(z, ((tx % n)+n)%n, Math.max(0, Math.min(n-1, ty)));
+      if (!tiles.has(k) && !want.has(k)) want.set(k, [tx, ty]);
+    }
+  }
+  await pool([...want.values()], 8, ([x,y]) => fetchTile(z, x, y));
+  return want.size;
+};
+
+const cellAt = (z, gx, gy) => {
+  const n = 1 << z, span = n * 256;
+  gx = ((gx % span) + span) % span; gy = Math.max(0, Math.min(span - 1, gy));
+  const t = tiles.get(tileKey(z, Math.floor(gx/256), Math.floor(gy/256)));
+  return t ? t[(gy % 256)*256 + (gx % 256)] : null;
+};
+
+// bilinear over the cached tiles; null if any contributing tile is missing
+const sampleAtZ = (lat, lon, z) => {
+  const [fx, fy] = mercPx(lat, lon, z);
+  const x0 = Math.floor(fx - 0.5), y0 = Math.floor(fy - 0.5);
+  const sx = fx - 0.5 - x0, sy = fy - 0.5 - y0;
+  const a = cellAt(z,x0,y0), b = cellAt(z,x0+1,y0), c = cellAt(z,x0,y0+1), e = cellAt(z,x0+1,y0+1);
+  if (a === null || b === null || c === null || e === null) return null;
+  return (a*(1-sx) + b*sx)*(1-sy) + (c*(1-sx) + e*sx)*sy;
+};
 
 const probeH = async (lat, lon, z = PROBE_Z) => {
-  const key = `${z}|${lat}|${lon}`;
-  if (probeCache.has(key)) return probeCache.get(key);
-  const n = 1 << z;
-  const la = Math.max(-85.0511, Math.min(85.0511, lat)) * d2r;
-  const fx = ((lon + 180)/360) * n * 256;
-  const fy = (0.5 - Math.log(Math.tan(Math.PI/4 + la/2))/(2*Math.PI)) * n * 256;
-  const tx0 = Math.floor((fx - 128)/256), ty0 = Math.floor((fy - 128)/256);
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = 512;
-  const cx = cv.getContext('2d', { willReadFrequently: true });
-  try {
-    await Promise.all([[0,0],[1,0],[0,1],[1,1]].map(async ([dx,dy]) => {
-      const tx = (((tx0+dx) % n) + n) % n, ty = Math.max(0, Math.min(n-1, ty0+dy));
-      cx.drawImage(await loadImg(TILE_URL(z, tx, ty)), dx*256, dy*256);
-    }));
-  } catch { probeCache.set(key, null); return null; }
-  const px = cx.getImageData(0, 0, 512, 512).data;
-  const at = (ix, iy) => { const o = (iy*512 + ix)*4; return px[o]*256 + px[o+1] + px[o+2]/256 - 32768; };
-  const lx = fx - tx0*256, ly = fy - ty0*256;          // lands in [128, 384)
-  const x0 = Math.floor(lx - 0.5), y0 = Math.floor(ly - 0.5);
-  const sx = lx - 0.5 - x0, sy = ly - 0.5 - y0;
-  const h = (at(x0,y0)*(1-sx) + at(x0+1,y0)*sx)*(1-sy) + (at(x0,y0+1)*(1-sx) + at(x0+1,y0+1)*sx)*sy;
-  probeCache.set(key, h);
-  return h;
+  await ensureTiles([[lat, lon]], z);
+  return sampleAtZ(lat, lon, z);
 };
 
 // ── hypsometric ramp ──────────────────────────────────────
@@ -463,6 +520,11 @@ const rim = new THREE.DirectionalLight(0xb05a32, 0.35); rim.position.set(-5,-2,-
 }
 
 const earth = new THREE.Group();
+// WGS84 figure. An oblate spheroid IS a sphere scaled along its polar axis, so
+// one scale gives the exact shape — and it matters: a−b is 21,385 m, 2.4× Everest,
+// so at ×1 relief the flattening is the dominant shape signal and was missing.
+const WGS84_FB = 1 - 1/298.257223563;
+earth.scale.set(1, WGS84_FB, 1);
 scene.add(earth);
 
 const ll2v = (lat, lon, r) => {
@@ -554,7 +616,7 @@ earth.add(cage);
 
 // ── markers ───────────────────────────────────────────────
 const marks = new THREE.Group(); earth.add(marks);
-let obsPin, obsRing, ararCone, baseLine;
+let obsPin, obsRing, ararCone, baseLine, sightLine;
 const BASE_SEGS = 48;
 
 const placeMarkers = (ex) => {
@@ -586,24 +648,89 @@ const placeMarkers = (ex) => {
   }
   const bp = baseLine.geometry.attributes.position;
   for (let i = 0; i <= BASE_SEGS; i++) {
-    const t = i/BASE_SEGS;
-    const lat = OBS.lat + (ARARAT.lat-OBS.lat)*t, lon = OBS.lon + (ARARAT.lon-OBS.lon)*t;
+    const [lat, lon] = BASE_PATH(i/BASE_SEGS);      // great circle, not a lat/lon lerp
     const p = ll2v(lat, lon, 1 + sampleH(lat,lon)*ex/R_E + 0.006);
     bp.setXYZ(i, p.x, p.y, p.z);
   }
   bp.needsUpdate = true;
   baseLine.geometry.computeBoundingSphere();
   baseLine.computeLineDistances();
+
+  // the sight ray itself: a straight chord observer → summit, against the profile
+  if (!sightLine) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+    sightLine = new THREE.Line(g, new THREE.LineBasicMaterial({ color:0x6b7a3a, transparent:true, opacity:0.85 }));
+    marks.add(sightLine);
+  }
+  const sp = sightLine.geometry.attributes.position;
+  sp.setXYZ(0, pO.x, pO.y, pO.z); sp.setXYZ(1, pA.x, pA.y, pA.z);
+  sp.needsUpdate = true;
+  sightLine.geometry.computeBoundingSphere();
 };
 
 // ── readouts ──────────────────────────────────────────────
 const BASELINE_M = haversine(OBS, ARARAT);   // DERIVED
 const FIELD = { obs: null, arar: null, ok: false };
 
+// ── sight line ────────────────────────────────────────────
+// On the effective-radius sphere the ray is straight and refraction lives in R'.
+// Observer at radius R'+h1 shooting at angle al above the local horizontal; at
+// central angle th the sine rule gives r = (R'+h1)·cos al / cos(th + al).
+const rayH = (d, h1, al, k = REFRACTION_K) => {
+  const Rp = R_E/(1-k);
+  return (Rp + h1) * Math.cos(al) / Math.cos(d/Rp + al) - Rp;
+};
+
+// great circle between two points — slerp the unit vectors, never lerp lat/lon
+const slerpLL = (A, B) => {
+  const toV = p => { const la = p.lat*d2r, lo = p.lon*d2r;
+    return [Math.cos(la)*Math.cos(lo), Math.cos(la)*Math.sin(lo), Math.sin(la)]; };
+  const a = toV(A), b = toV(B);
+  const om = Math.acos(Math.max(-1, Math.min(1, a[0]*b[0] + a[1]*b[1] + a[2]*b[2])));
+  const so = Math.sin(om);
+  return t => {
+    const w1 = so < 1e-9 ? 1-t : Math.sin((1-t)*om)/so;
+    const w2 = so < 1e-9 ? t   : Math.sin(t*om)/so;
+    const x = a[0]*w1 + b[0]*w2, y = a[1]*w1 + b[1]*w2, z = a[2]*w1 + b[2]*w2;
+    return [Math.asin(z/Math.hypot(x,y,z))*r2d, Math.atan2(y,x)*r2d];
+  };
+};
+const BASE_PATH = slerpLL(OBS, ARARAT);
+
+// Is Masis actually above the horizon from that shore? Endpoint arithmetic
+// cannot answer it — the terrain between can stand in the way. Walk the profile
+// and take the deepest intrusion into the observer→summit ray.
+const LOS = { done:false, clear:null, atM:0, terrH:0, farClear:null, farAtM:0, miss:0, tiles:0 };
+// the ray touches the ground at both ends by construction, so the intervening
+// terrain is judged over an open window: the observer's own bank is not a ridge
+const LOS_NEAR_M = 1000;
+
+const computeLOS = async () => {
+  const pts = [];
+  for (let i = 0; i <= PROFILE_N; i++) pts.push(BASE_PATH(i/PROFILE_N));
+  LOS.tiles = await ensureTiles(pts, PROFILE_Z);
+  const h1 = FIELD.obs ?? OBS.h, hS = FIELD.arar ?? ARARAT.h;
+  const al = elevAngle(BASELINE_M, h1, hS) * d2r;
+  let worst = Infinity, far = Infinity, miss = 0;
+  for (let i = 1; i < PROFILE_N; i++) {
+    const d = BASELINE_M * i/PROFILE_N;
+    const h = sampleAtZ(pts[i][0], pts[i][1], PROFILE_Z);
+    if (h === null) { miss++; continue; }
+    const c = rayH(d, h1, al) - h;
+    if (c < worst) { worst = c; LOS.atM = d; LOS.terrH = h; }
+    if (d > LOS_NEAR_M && d < BASELINE_M - LOS_NEAR_M && c < far) { far = c; LOS.farAtM = d; }
+  }
+  LOS.miss = miss; LOS.clear = worst; LOS.farClear = far;
+  LOS.done = miss < PROFILE_N*0.1 && worst < Infinity;
+  updateReadouts();
+};
+
 const refreshProbes = async () => {
   const [o, a] = await Promise.all([probeH(OBS.lat, OBS.lon), probeH(ARARAT.lat, ARARAT.lon)]);
   FIELD.obs = o; FIELD.arar = a; FIELD.ok = o != null && a != null;
   updateReadouts();
+  computeLOS();
 };
 
 const updateReadouts = () => {
@@ -637,6 +764,17 @@ const updateReadouts = () => {
   $('s-resid').textContent = (rs >= 0 ? '+' : '') + fmt(rs) + ' m';
   $('s-arar').textContent = fmt(hA) + ' m';
   $('s-probe').textContent = FIELD.ok ? `z${PROBE_Z} · ${(40075017/(256*(1<<PROBE_Z))*Math.cos(OBS.lat*d2r)).toFixed(1)} m/px` : 'pending';
+  if (LOS.done) {
+    const blocked = LOS.clear < 0;
+    $('s-los').textContent = blocked ? 'OBSTRUCTED' : 'CLEAR';
+    $('s-los').className = 'v ' + (blocked ? 'warn' : 'hot');
+    $('s-los-c').textContent = (LOS.clear >= 0 ? '+' : '') + fmt(LOS.clear) + ' m';
+    $('s-los-at').textContent = `${(LOS.atM/1000).toFixed(2)} km · terrain ${fmt(LOS.terrH)} m`;
+    $('s-los-far').textContent = LOS.farClear < Infinity
+      ? `${LOS.farClear >= 0 ? '+' : ''}${fmt(LOS.farClear)} m at ${(LOS.farAtM/1000).toFixed(1)} km` : '—';
+    $('s-los-n').textContent = `${PROFILE_N} pts · z${PROFILE_Z} · ${LOS.tiles} tiles` +
+      (LOS.miss ? ` · ${LOS.miss} ABSENT` : '');
+  }
   $('s-shell-o').textContent = DEM_OK ? fmt(shellO) + ' m' : 'ABSENT';
   $('s-shell-a').textContent = DEM_OK ? fmt(shellA) + ' m' : 'ABSENT';
   $('s-angle').textContent = elevAngle(BASELINE_M, hO, hA).toFixed(2) + '°';
