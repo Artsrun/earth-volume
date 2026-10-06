@@ -143,7 +143,7 @@ input[type=range]::-moz-range-thumb{width:3px;height:22px;background:var(--ochre
   <header class="top">
     <div><span class="brand">EARTH.VOLUME</span><span class="label">/ geodesic shell / v2.0</span></div>
     <div><span class="label">Section</span><span class="val">§A.004</span></div>
-    <div><span class="label">Datum</span><span class="val">WGS84 · EGM2008</span></div>
+    <div><span class="label">Datum</span><span class="val">WGS84 · EGM96</span></div>
     <div><span class="label">UTC</span><span class="val" id="clock">—</span></div>
   </header>
 
@@ -183,11 +183,11 @@ input[type=range]::-moz-range-thumb{width:3px;height:22px;background:var(--ochre
         <div class="section-head"><span class="num">§01</span><span class="title">Elevation source</span><span class="fig">FIG.2</span></div>
         <div class="rows">
           <div class="row"><span class="k">Dataset</span><span class="v hot" style="font-size:11px">GMTED2010 / ETOPO1</span>
-            <span class="sub"><span class="tag m">measured</span> served as terrarium RGB tiles, AWS Open Data</span></div>
+            <span class="sub"><span class="tag m">measured</span> served as terrarium RGB tiles, AWS Open Data · orthometric, GMTED2010 is EGM96-referenced — no undulation model is applied here</span></div>
           <div class="row"><span class="k">Tile zoom</span><span class="v" id="s-zoom">z3</span>
             <span class="sub">grid <span id="s-grid">8×8</span> · raster <span id="s-raster">2048²</span> px</span></div>
           <div class="row"><span class="k">Ground sample dist.</span><span class="v" id="s-gsd">—</span>
-            <span class="sub"><span class="tag d">derived</span> shell raster, at equator — mesh-scale only; the pyramid is mean-aggregated, so summits average away. Field points use a separate z13 probe.</span></div>
+            <span class="sub"><span class="tag d">derived</span> at equator; <span id="s-gsd-lat">—</span> at the observer's latitude. Shell raster — mesh-scale only; the pyramid is mean-aggregated, so summits average away. Field points use a separate z13 probe.</span></div>
           <div class="row"><span class="k">Polar coverage</span><span class="v warn">±85.051°</span>
             <span class="sub"><span class="tag a">absent</span> beyond Mercator limit — edge value held</span></div>
         </div>
@@ -357,8 +357,10 @@ const loadDEM = async (z) => {
 
   const px = cx.getImageData(0,0,size,size).data;
   DEM = new Int16Array(size*size);
+  // round, don't truncate: Int16Array assignment truncates toward zero, which is a
+  // signed bias (-1 m on land, +1 m in bathymetry) with a discontinuity at the datum
   for (let i = 0, p = 0; i < DEM.length; i++, p += 4)
-    DEM[i] = (px[p]*256 + px[p+1] + px[p+2]/256) - 32768;
+    DEM[i] = Math.round((px[p]*256 + px[p+1] + px[p+2]/256) - 32768);
   DEM_N = size;
   return true;
 };
@@ -608,8 +610,10 @@ const updateReadouts = () => {
   $('s-base').textContent = (BASELINE_M/1000).toFixed(2) + ' km';
   $('s-base-d').textContent = ((BASELINE_M - FIELD_BASELINE_M)/1000).toFixed(2) + ' km';
   $('s-ang-dec').textContent = elevAngle(BASELINE_M, OBS.h, ARARAT.h).toFixed(2) + '°';
-  const gsd = 40075017 / (256 * (1 << ZOOM));
+  const gsd = 40075017 / (256 * (1 << ZOOM));          // at the equator
+  const gsdLat = gsd * Math.cos(OBS.lat * d2r);        // Mercator shrinks with latitude
   $('s-gsd').textContent = (gsd/1000).toFixed(1) + ' km/px';
+  $('s-gsd-lat').textContent = (gsdLat/1000).toFixed(1) + ' km/px';
   $('m-gsd').textContent = (gsd/1000).toFixed(1) + ' km/px';
   $('s-zoom').textContent = 'z' + ZOOM;
   $('s-grid').textContent = `${1<<ZOOM}×${1<<ZOOM}`;
@@ -617,19 +621,24 @@ const updateReadouts = () => {
   $('m-dem').textContent = DEM_OK ? `terrarium z${ZOOM}` : 'unavailable';
 
   if (!DEM_OK) {
-    ['s-obs','s-resid','s-arar','s-angle','s-angle-k','s-shell-o','s-shell-a','r-obs'].forEach(i => $(i).textContent = 'ABSENT');
-    return;
+    // the shell raster is gone, but the z13 probe is a separate fetch — keep it
+    ['s-shell-o','s-shell-a'].forEach(i => $(i).textContent = 'ABSENT');
+    if (!FIELD.ok) {
+      ['s-obs','s-resid','s-arar','s-angle','s-angle-k','r-obs'].forEach(i => $(i).textContent = 'ABSENT');
+      return;
+    }
   }
   const shellO = sampleH(OBS.lat, OBS.lon), shellA = sampleH(ARARAT.lat, ARARAT.lon);
-  const hO = FIELD.obs ?? shellO, hA = FIELD.arar ?? shellA;
+  const hO = FIELD.obs ?? (DEM_OK ? shellO : null), hA = FIELD.arar ?? (DEM_OK ? shellA : null);
+  if (hO == null || hA == null) return;
   $('s-obs').textContent = fmt(hO) + ' m';
   $('r-obs').textContent = fmt(hO) + ' m';
   const rs = hO - OBS.h;
   $('s-resid').textContent = (rs >= 0 ? '+' : '') + fmt(rs) + ' m';
   $('s-arar').textContent = fmt(hA) + ' m';
   $('s-probe').textContent = FIELD.ok ? `z${PROBE_Z} · ${(40075017/(256*(1<<PROBE_Z))*Math.cos(OBS.lat*d2r)).toFixed(1)} m/px` : 'pending';
-  $('s-shell-o').textContent = fmt(shellO) + ' m';
-  $('s-shell-a').textContent = fmt(shellA) + ' m';
+  $('s-shell-o').textContent = DEM_OK ? fmt(shellO) + ' m' : 'ABSENT';
+  $('s-shell-a').textContent = DEM_OK ? fmt(shellA) + ' m' : 'ABSENT';
   $('s-angle').textContent = elevAngle(BASELINE_M, hO, hA).toFixed(2) + '°';
   // uncertainty band: refraction, not geometry, dominates (k = 0.07 … 0.25)
   $('s-angle-k').textContent =
