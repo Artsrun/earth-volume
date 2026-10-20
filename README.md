@@ -62,6 +62,114 @@ back to z3.
 
 ---
 
+## Accuracy pass (v2.1 → v2.2)
+
+Three tiers, measured against the DEM rather than asserted.
+
+### 1 · The Ararat constant was 8.33 km off the summit
+
+`39.702, 44.396` samples **2,363 m** at native resolution — it is on the eastern
+flank, not Masis. Searching the raster for the massif's own local maximum
+(z10 → z12 → z14) recovers **5,111 m at 39.7019, 44.2986**, 27 m from the
+declared 5,137 m. The §05 caption blamed the raster for an error in the
+coordinate.
+
+| | was | now |
+|---|---|---|
+| summit, native zoom | 2,363 m | **5,111 m** |
+| ground distance | 53.384 km (frozen) | **55.217 km** (derived) |
+| elevation angle, declared h | 4.34° | **4.18°** |
+| elevation angle, DEM heights | 0.63° | **4.04°** |
+
+`BASELINE_M` and `NET_DEPRESSION` are no longer frozen — both derive from the
+coordinates, through the exact spherical form on an effective-radius sphere.
+A refraction band (k = 0.07 … 0.25) is shown, because that spread is 2.6′ while
+geodesic-vs-haversine, Euler-vs-mean radius and exact-vs-linearised angle come
+to ~11″ **combined**: refraction dominates every geometric term by ~14×.
+
+### 2 · The shell raster cannot report point elevations
+
+Two independent reasons, both measured:
+
+- **Scale.** Detail 5 vertex spacing is 209 km; a z3 cell is 19.6 km. Each vertex
+  point-samples 1 of ~114 cells. Against the true cell mean over 40 random land
+  points: **RMS 467 m, max 1,806 m**. Raising tile zoom makes it worse (z4 → 456
+  cells per vertex); a mesh that resolves z3 needs detail 8.4 ≈ 2.3M faces.
+- **Aggregation.** The Terrarium pyramid is mean-aggregated, so summits are
+  destroyed going up it: Masis reads 2,657 m at z3, 4,316 at z6, 5,023 at z8,
+  5,110 at z14. `MEASURED` at z3 means *area mean*, not *elevation*.
+
+So the two jobs are now split. The shell keeps the coarse global raster; the
+named field points get `probeH()` — a 4-tile fetch at z13 (14.6 m/px at 40°N)
+bilinear-sampled off a scratch canvas. **Eight tiles, not 65,536.** The panel
+prints both numbers side by side.
+
+The observer residual survives the fix at **+103 m**, so it is terrain, not
+aliasing: at z14 the 50 m neighbourhood of the pin spans 987–1012 m and the
+lowest cell within 4 km is 876 m, ~3 km SSW. Either the pin sits up the bank or
+the declared 895 m is the water surface elsewhere — reported, not explained away.
+
+### 3 · Metres
+
+- `Int16Array` assignment **truncates toward zero** — a signed bias (−1 m on land,
+  +1 m in bathymetry) with a discontinuity at the datum. Now `Math.round`.
+- Ground sample distance was quoted at the equator only; the observer's latitude
+  figure (×cos φ) is shown alongside.
+- The header claimed **EGM2008** while GMTED2010 is EGM96-referenced and no
+  undulation model is applied anywhere in the code. Label corrected and stated.
+
+Verified non-issue: the canvas decode path is byte-exact — the tiles carry no
+`gAMA`/`iCCP`/`sRGB` chunk and `getImageData` matches a reference zlib decode.
+
+---
+
+## Line of sight (v2.3)
+
+The question the project is actually about — *is Masis above the horizon from
+that shore?* — was never computed. Endpoint arithmetic cannot answer it; the
+terrain between can stand in the way.
+
+On the effective-radius sphere the ray is straight and refraction lives in R′,
+so the ray height at central angle θ follows from the sine rule:
+
+```
+r = (R′ + h₁) · cos α / cos(θ + α)        α = elevation angle to the summit
+```
+
+Walk the great circle at z12 (29 m/px), 512 points, and take the deepest
+intrusion of terrain into that ray. Only the tiles the line crosses are
+fetched — **10 tiles** for a 55 km baseline.
+
+```
+verdict                CLEAR
+minimum clearance      +6 m at 0.11 km  (terrain 1,000 m)
+clearance, open window  +122 m at 1.1 km
+```
+
+The binding constraint is **the observer's own bank, 110 m away** — which is the
+same +103 m of terrain that the §04 residual reports, showing up a second time
+as a grazing limit. Beyond it nothing intervenes. The result holds across the
+whole plausible refraction range (k = 0.07 … 0.25 moves the open-window figure
+by 1 m), so it is not a refraction artefact. The ray meets the ground at both
+ends by construction, so the intervening terrain is judged over an open window
+1 km clear of each.
+
+Also in this pass:
+
+- The baseline polyline **slerps the unit vectors** instead of lerping lat/lon,
+  and the straight sight ray is drawn beside the terrain profile.
+- The shell is the **WGS84 spheroid**. An oblate spheroid is a sphere scaled
+  along its polar axis, so one scale gives the exact figure — and it matters:
+  a − b is 21,385 m, **2.4× Everest**, so at ×1 relief the flattening is the
+  dominant shape signal and it was missing.
+- The point probe and the profile now share one tile-level sampler, so each
+  tile is fetched and decoded once whoever asks for it.
+
+Cross-checked against an independent implementation (pure-Python PNG decode,
+same formulas): identical to the metre.
+
+---
+
 ## Field constants (frozen)
 - Observer: 40.177°N 44.487°E · declared 895 m (SW shore Erebuni / Lake Yerevan)
 - Ararat summit: 39.702°N 44.396°E · declared 5 137 m
